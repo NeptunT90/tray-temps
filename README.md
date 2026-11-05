@@ -50,7 +50,7 @@
 ### Р’Р°СЂРёР°РЅС‚ 2: СЃРєСЂРёРїС‚ СѓСЃС‚Р°РЅРѕРІРєРё
 
 ```powershell
-irm https://raw.githubusercontent.com/<owner>/tray-temps/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/NeptunT90/tray-temps/main/install/install.ps1 | iex
 ```
 
 РЎРєСЂРёРїС‚ СЃРєР°С‡РёРІР°РµС‚ РїРѕСЃР»РµРґРЅРёР№ СЂРµР»РёР·, СЂР°СЃРїР°РєРѕРІС‹РІР°РµС‚ РІ `%LOCALAPPDATA%\TrayTemps` Рё СЃРѕР·РґР°С‘С‚ СЏСЂР»С‹Рє Р°РІС‚РѕР·Р°РїСѓСЃРєР°. РЈРґР°Р»РµРЅРёРµ вЂ” `install/uninstall.ps1`.
@@ -81,4 +81,5 @@ CI: `.github/workflows/release.yml` СЃРѕР±РёСЂР°РµС‚ Р°СЂС
 
 РљРѕРґ РїСЂРёР»РѕР¶РµРЅРёСЏ вЂ” MIT (СЃРј. [LICENSE](LICENSE)).
 Р‘РёР±Р»РёРѕС‚РµРєРё РґР°С‚С‡РёРєРѕРІ СЂР°СЃРїСЂРѕСЃС‚СЂР°РЅСЏСЋС‚СЃСЏ РїРѕРґ СЃРІРѕРёРјРё Р»РёС†РµРЅР·РёСЏРјРё вЂ” СЃРј. [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). LibreHardwareMonitor вЂ” MPL-2.0, РёСЃС…РѕРґРЅРёРєРё РЅР° [github.com/LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor).
+
 

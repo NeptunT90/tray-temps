@@ -1,4 +1,4 @@
-<#
+﻿<#
   Installs the latest TrayTemps release into %LOCALAPPDATA%\TrayTemps
   and adds it to the user's startup folder.
 
@@ -9,7 +9,7 @@
 #>
 param(
     [switch]$NoAutostart,
-    [string]$Repo = "OWNER/tray-temps"
+    [string]$Repo = "NeptunT90/tray-temps"
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,3 +44,4 @@ if (-not $NoAutostart) {
 
 Start-Process (Join-Path $target "TrayTemps.exe")
 Write-Host "Done. Confirm the UAC prompt so the sensors can be read."
+
