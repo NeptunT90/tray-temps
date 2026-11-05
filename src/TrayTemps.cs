@@ -1184,6 +1184,7 @@ namespace TrayTemps
 
             _mouseHook = MouseHookCallback;
             _hookHandle = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, _mouseHook, IntPtr.Zero, 0);
+
         }
 
         private void ClosePanelMenu()
@@ -1196,6 +1197,24 @@ namespace TrayTemps
             if (_menu.Visible) _menu.Close();
         }
 
+        private bool MenuContains(Point point)
+        {
+            if (_menu.Bounds.Contains(point)) return true;
+            foreach (ToolStripItem entry in _menu.Items)
+            {
+                var item = entry as ToolStripMenuItem;
+                if (item == null || !item.HasDropDownItems || !item.DropDown.Visible) continue;
+                if (item.DropDown.Bounds.Contains(point)) return true;
+                foreach (ToolStripItem subEntry in item.DropDownItems)
+                {
+                    var sub = subEntry as ToolStripMenuItem;
+                    if (sub == null || !sub.HasDropDownItems || !sub.DropDown.Visible) continue;
+                    if (sub.DropDown.Bounds.Contains(point)) return true;
+                }
+            }
+            return false;
+        }
+
         private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode >= 0 && _menu != null && _menu.Visible)
@@ -1205,7 +1224,7 @@ namespace TrayTemps
                 {
                     var info = (Native.MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Native.MSLLHOOKSTRUCT));
                     var point = new Point(info.Point.X, info.Point.Y);
-                    if (!_menu.Bounds.Contains(point))
+                    if (!MenuContains(point))
                         BeginInvoke((Action)ClosePanelMenu);
                 }
             }
