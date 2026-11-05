@@ -1,0 +1,7 @@
+﻿dist/
+.cache/
+*.zip
+*.user
+.vs/
+bin/
+obj/
