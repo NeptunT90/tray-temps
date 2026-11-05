@@ -23,6 +23,7 @@ namespace TrayTemps
         public double DiskWatts = double.NaN;
         public double GpuFanRpm = double.NaN;
         public double GpuFanPercent = double.NaN;
+        public double CpuFanRpm = double.NaN;
     }
 
     internal sealed class SensorReader : IDisposable
@@ -194,9 +195,19 @@ namespace TrayTemps
                 if (powers.Count > 0 && double.IsNaN(reading.DiskWatts)) reading.DiskWatts = powers[0].Value;
                 return;
             }
-            if (type.IndexOf("Motherboard", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (type.IndexOf("Motherboard", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                type.IndexOf("SuperIO", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                type.IndexOf("Super I/O", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                if (double.IsNaN(reading.Board)) reading.Board = temperatures[0].Value;
+                var isSuperIo = type.IndexOf("SuperIO", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                type.IndexOf("Super I/O", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!isSuperIo && double.IsNaN(reading.Board) && temperatures.Count > 0) reading.Board = temperatures[0].Value;
+                foreach (var pair in fans)
+                {
+                    if (pair.Value <= 0) continue;
+                    if (pair.Key.ToLowerInvariant().Contains("cpu")) { reading.CpuFanRpm = pair.Value; break; }
+                    if (double.IsNaN(reading.CpuFanRpm)) reading.CpuFanRpm = pair.Value;
+                }
             }
         }
 
@@ -621,6 +632,8 @@ namespace TrayTemps
         private bool _showDisk = true;
         private bool _showBoard = true;
         private bool _showWatts = true;
+        private string _cpuPlate = "watts";
+        private string _gpuPlate = "rpm";
 
         private int _ticks;
         private bool _reopened;
@@ -700,6 +713,26 @@ namespace TrayTemps
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("\u0412\u044b\u0445\u043e\u0434", null, (s, e) => Close());
             return menu;
+        }
+
+        private ToolStripMenuItem Radio(string text, bool selected, Action apply)
+        {
+            var item = new ToolStripMenuItem(text) { Checked = selected, CheckOnClick = false };
+            item.Click += (s, e) => { apply(); RebuildMenuSelection(item); };
+            return item;
+        }
+
+        private void RebuildMenuSelection(ToolStripMenuItem clicked)
+        {
+            var owner = clicked.OwnerItem as ToolStripMenuItem;
+            if (owner != null)
+            {
+                foreach (ToolStripItem entry in owner.DropDownItems)
+                {
+                    var item = entry as ToolStripMenuItem;
+                    if (item != null) item.Checked = ReferenceEquals(item, clicked);
+                }
+            }
         }
 
         private ToolStripMenuItem Toggle(string text, bool value, Action<bool> apply)
@@ -785,6 +818,8 @@ namespace TrayTemps
                     else if (trimmed.StartsWith("showDisk=")) _showDisk = trimmed.EndsWith("1");
                     else if (trimmed.StartsWith("showBoard=")) _showBoard = trimmed.EndsWith("1");
                     else if (trimmed.StartsWith("showWatts=")) _showWatts = trimmed.EndsWith("1");
+                    else if (trimmed.StartsWith("cpuPlate=")) _cpuPlate = trimmed.Substring("cpuPlate=".Length).Trim();
+                    else if (trimmed.StartsWith("gpuPlate=")) _gpuPlate = trimmed.Substring("gpuPlate=".Length).Trim();
                 }
             }
             catch { }
@@ -803,6 +838,8 @@ namespace TrayTemps
                     "showDisk=" + (_showDisk ? "1" : "0"),
                     "showBoard=" + (_showBoard ? "1" : "0"),
                     "showWatts=" + (_showWatts ? "1" : "0"),
+                    "cpuPlate=" + _cpuPlate,
+                    "gpuPlate=" + _gpuPlate,
                 };
                 File.WriteAllLines(_settingsPath, lines.ToArray());
             }
@@ -847,8 +884,8 @@ namespace TrayTemps
         {
             var reading = _lastReading;
             var list = new List<Metric>();
-            if (_showCpu) list.Add(new Metric { Label = "\u0426\u041f", Value = reading.Cpu, Watts = reading.CpuWatts });
-            if (_showGpu) list.Add(new Metric { Label = "\u0413\u041f", Value = reading.Gpu, Watts = reading.GpuWatts, Plate = FanText(reading) });
+            if (_showCpu) list.Add(new Metric { Label = "\u0426\u041f", Value = reading.Cpu, Watts = reading.CpuWatts, Plate = _cpuPlate == "rpm" ? FanText(reading.CpuFanRpm, double.NaN) : Watts(reading.CpuWatts) });
+            if (_showGpu) list.Add(new Metric { Label = "\u0413\u041f", Value = reading.Gpu, Watts = reading.GpuWatts, Plate = _gpuPlate == "rpm" ? FanText(reading.GpuFanRpm, reading.GpuFanPercent) : Watts(reading.GpuWatts) });
             if (_showDisk) list.Add(new Metric { Label = "\u0414\u0418\u0421\u041a", Value = reading.Disk, Watts = reading.DiskWatts });
             if (_showBoard) list.Add(new Metric { Label = "\u041f\u041b\u0410\u0422\u0410", Value = reading.Board, Watts = double.NaN });
 
@@ -860,11 +897,11 @@ namespace TrayTemps
             return list;
         }
 
-        private static string FanText(Reading reading)
+        private static string FanText(double rpm, double percent)
         {
-            if (!double.IsNaN(reading.GpuFanRpm)) return ((int)Math.Round(reading.GpuFanRpm)).ToString() + " \u043e\u0431/\u043c\u0438\u043d";
-            if (!double.IsNaN(reading.GpuFanPercent)) return ((int)Math.Round(reading.GpuFanPercent)).ToString() + " %";
-            return null;
+            if (!double.IsNaN(rpm) && rpm > 0) return ((int)Math.Round(rpm)).ToString() + " \u043e\u0431/\u043c\u0438\u043d";
+            if (!double.IsNaN(percent)) return ((int)Math.Round(percent)).ToString() + " %";
+            return "\u2014";
         }
 
         private List<KeyValuePair<int, string>> BuildPlates(int hoverX)
@@ -1071,6 +1108,7 @@ namespace TrayTemps
             if (double.IsNaN(reading.GpuWatts)) reading.GpuWatts = _lastReading.GpuWatts; else _lastReading.GpuWatts = reading.GpuWatts;
             if (double.IsNaN(reading.GpuFanRpm)) reading.GpuFanRpm = _lastReading.GpuFanRpm; else _lastReading.GpuFanRpm = reading.GpuFanRpm;
             if (double.IsNaN(reading.GpuFanPercent)) reading.GpuFanPercent = _lastReading.GpuFanPercent; else _lastReading.GpuFanPercent = reading.GpuFanPercent;
+            if (double.IsNaN(reading.CpuFanRpm)) reading.CpuFanRpm = _lastReading.CpuFanRpm; else _lastReading.CpuFanRpm = reading.CpuFanRpm;
 
             _ticks++;
             if (double.IsNaN(reading.Disk) && !_reopened && _ticks > 3)
