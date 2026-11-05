@@ -633,6 +633,8 @@ namespace TrayTemps
         private bool _showBoard = true;
         private bool _showWatts = true;
         private string _cpuPlate = "watts";
+        private bool _hideFullscreen = true;
+        private bool _wasFullscreen;
         private string _gpuPlate = "rpm";
 
         private int _ticks;
@@ -672,7 +674,7 @@ namespace TrayTemps
             _topTimer.Tick += (sender, args) =>
             {
                 if (!Visible) return;
-                if (!_alwaysOnTop && IsFullscreenForeground()) return;
+                if (IsFullscreenForeground()) return;
                 Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
             };
             _topTimer.Start();
@@ -755,6 +757,7 @@ namespace TrayTemps
             visible.DropDownItems.Add(Toggle("\u041f\u041b\u0410\u0422\u0410", _showBoard, v => _showBoard = v));
             visible.DropDownItems.Add(new ToolStripSeparator());
             visible.DropDownItems.Add(Toggle("\u041f\u043b\u0430\u0448\u043a\u0438", _showWatts, v => _showWatts = v));
+            visible.DropDownItems.Add(Toggle("\u0421\u043a\u0440\u044b\u0432\u0430\u0442\u044c \u0432 \u043f\u043e\u043b\u043d\u043e\u044d\u043a\u0440\u0430\u043d\u043d\u043e\u043c", _hideFullscreen, v => _hideFullscreen = v));
 
             var platesMenu = new ToolStripMenuItem("\u041f\u043b\u0430\u0448\u043a\u0438: \u0447\u0442\u043e \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c");
             var cpuPlateMenu = new ToolStripMenuItem("\u0426\u041f");
@@ -829,6 +832,7 @@ namespace TrayTemps
                     else if (trimmed.StartsWith("showDisk=")) _showDisk = trimmed.EndsWith("1");
                     else if (trimmed.StartsWith("showBoard=")) _showBoard = trimmed.EndsWith("1");
                     else if (trimmed.StartsWith("showWatts=")) _showWatts = trimmed.EndsWith("1");
+                    else if (trimmed.StartsWith("hideFullscreen=")) _hideFullscreen = trimmed.EndsWith("1");
                     else if (trimmed.StartsWith("cpuPlate=")) _cpuPlate = trimmed.Substring("cpuPlate=".Length).Trim();
                     else if (trimmed.StartsWith("gpuPlate=")) _gpuPlate = trimmed.Substring("gpuPlate=".Length).Trim();
                 }
@@ -849,6 +853,7 @@ namespace TrayTemps
                     "showDisk=" + (_showDisk ? "1" : "0"),
                     "showBoard=" + (_showBoard ? "1" : "0"),
                     "showWatts=" + (_showWatts ? "1" : "0"),
+                    "hideFullscreen=" + (_hideFullscreen ? "1" : "0"),
                     "cpuPlate=" + _cpuPlate,
                     "gpuPlate=" + _gpuPlate,
                 };
@@ -1135,6 +1140,20 @@ namespace TrayTemps
             foreach (var metric in metrics) tooltipParts.Add(metric.Label + " " + Format(metric.Value));
             var tooltip = string.Join("   ", tooltipParts.ToArray());
             _tray.Text = tooltip.Length > 63 ? tooltip.Substring(0, 63) : tooltip;
+
+            var fullscreen = IsFullscreenForeground();
+            if (_hideFullscreen && fullscreen)
+            {
+                _wasFullscreen = true;
+                if (_popup != null && _popup.Visible) _popup.Hide();
+                if (Visible) Visible = false;
+                return;
+            }
+            if (_wasFullscreen)
+            {
+                _wasFullscreen = false;
+                Visible = !_hidden;
+            }
 
             if (Visible == _hidden)
             {
