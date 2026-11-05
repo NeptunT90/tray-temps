@@ -754,7 +754,17 @@ namespace TrayTemps
             visible.DropDownItems.Add(Toggle("\u0414\u0418\u0421\u041a", _showDisk, v => _showDisk = v));
             visible.DropDownItems.Add(Toggle("\u041f\u041b\u0410\u0422\u0410", _showBoard, v => _showBoard = v));
             visible.DropDownItems.Add(new ToolStripSeparator());
-            visible.DropDownItems.Add(Toggle("\u0412\u0430\u0442\u0442\u044b \u0426\u041f", _showWatts, v => _showWatts = v));
+            visible.DropDownItems.Add(Toggle("\u041f\u043b\u0430\u0448\u043a\u0438", _showWatts, v => _showWatts = v));
+
+            var platesMenu = new ToolStripMenuItem("\u041f\u043b\u0430\u0448\u043a\u0438: \u0447\u0442\u043e \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c");
+            var cpuPlateMenu = new ToolStripMenuItem("\u0426\u041f");
+            cpuPlateMenu.DropDownItems.Add(Radio("\u0412\u0430\u0442\u0442\u044b", _cpuPlate == "watts", () => { _cpuPlate = "watts"; SaveSettings(); Refresh2(); }));
+            cpuPlateMenu.DropDownItems.Add(Radio("\u041e\u0431\u043e\u0440\u043e\u0442\u044b", _cpuPlate == "rpm", () => { _cpuPlate = "rpm"; SaveSettings(); Refresh2(); }));
+            var gpuPlateMenu = new ToolStripMenuItem("\u0413\u041f");
+            gpuPlateMenu.DropDownItems.Add(Radio("\u0412\u0430\u0442\u0442\u044b", _gpuPlate == "watts", () => { _gpuPlate = "watts"; SaveSettings(); Refresh2(); }));
+            gpuPlateMenu.DropDownItems.Add(Radio("\u041e\u0431\u043e\u0440\u043e\u0442\u044b", _gpuPlate == "rpm", () => { _gpuPlate = "rpm"; SaveSettings(); Refresh2(); }));
+            platesMenu.DropDownItems.Add(cpuPlateMenu);
+            platesMenu.DropDownItems.Add(gpuPlateMenu);
 
             var startup = new ToolStripMenuItem("\u0417\u0430\u043f\u0443\u0441\u043a\u0430\u0442\u044c \u0441 Windows") { CheckOnClick = true, Checked = StartupShortcutExists() };
             startup.CheckedChanged += (s, e) => SetStartupShortcut(startup.Checked);
@@ -766,6 +776,7 @@ namespace TrayTemps
 
             menu.Items.Add(top);
             menu.Items.Add(visible);
+            menu.Items.Add(platesMenu);
             menu.Items.Add(startup);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(hide);
