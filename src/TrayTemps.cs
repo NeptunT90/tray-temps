@@ -312,6 +312,34 @@ namespace TrayTemps
         [DllImport("gdi32.dll")]
         public static extern bool DeleteObject(IntPtr obj);
 
+        public delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr module, uint threadId);
+
+        [DllImport("user32.dll")]
+        public static extern bool UnhookWindowsHookEx(IntPtr hook);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr CallNextHookEx(IntPtr hook, int nCode, IntPtr wParam, IntPtr lParam);
+
+        public const int WH_MOUSE_LL = 14;
+        public const int WM_LBUTTONDOWN = 0x0201;
+        public const int WM_RBUTTONDOWN = 0x0204;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINTLL { public int X, Y; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MSLLHOOKSTRUCT
+        {
+            public POINTLL Point;
+            public uint MouseData;
+            public uint Flags;
+            public uint Time;
+            public IntPtr ExtraInfo;
+        }
+
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
 
@@ -351,6 +379,8 @@ namespace TrayTemps
         private readonly SensorReader _reader;
         private readonly Timer _timer;
         private Timer _topTimer;
+        private Native.HookProc _mouseHook;
+        private IntPtr _hookHandle = IntPtr.Zero;
         private readonly NotifyIcon _tray;
         private IntPtr _trayIconHandle = IntPtr.Zero;
 
@@ -401,14 +431,18 @@ namespace TrayTemps
             _tray.DoubleClick += (sender, args) => ToggleVisible();
             LoadSettings();
             _menu = BuildPanelMenu();
-            _menu.Closed += (sender, args) => Refresh2();
+            _menu.Closed += (sender, args) =>
+            {
+                if (_hookHandle != IntPtr.Zero)
+                {
+                    Native.UnhookWindowsHookEx(_hookHandle);
+                    _hookHandle = IntPtr.Zero;
+                }
+                Refresh2();
+            };
             MouseClick += (sender, args) =>
             {
-                if (args.Button != MouseButtons.Left && args.Button != MouseButtons.Right) return;
-                var x = Math.Max(0, Math.Min(Location.X, Screen.PrimaryScreen.WorkingArea.Right - _menu.Width));
-                var y = Location.Y - _menu.Height - 6;
-                if (y < 0) y = Location.Y + Height + 6;
-                _menu.Show(new Point(x, y));
+                if (args.Button == MouseButtons.Right) TogglePanelMenu();
             };
 
             Refresh2();
@@ -419,6 +453,46 @@ namespace TrayTemps
                 if (_reader != null && double.IsNaN(_last.Disk)) Log("inventory:" + Environment.NewLine + _reader.Inventory());
             };
             probe.Start();
+        }
+
+        private void TogglePanelMenu()
+        {
+            if (_menu.Visible) { ClosePanelMenu(); return; }
+
+            var size = _menu.PreferredSize;
+            var x = Math.Max(0, Math.Min(Location.X, Screen.PrimaryScreen.WorkingArea.Right - size.Width));
+            var y = Location.Y - size.Height - 6;
+            if (y < 0) y = Location.Y + Height + 6;
+            _menu.Show(new Point(x, y));
+
+            _mouseHook = MouseHookCallback;
+            _hookHandle = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, _mouseHook, IntPtr.Zero, 0);
+        }
+
+        private void ClosePanelMenu()
+        {
+            if (_hookHandle != IntPtr.Zero)
+            {
+                Native.UnhookWindowsHookEx(_hookHandle);
+                _hookHandle = IntPtr.Zero;
+            }
+            if (_menu.Visible) _menu.Close();
+        }
+
+        private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0 && _menu != null && _menu.Visible)
+            {
+                var message = wParam.ToInt32();
+                if (message == Native.WM_LBUTTONDOWN || message == Native.WM_RBUTTONDOWN)
+                {
+                    var info = (Native.MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Native.MSLLHOOKSTRUCT));
+                    var point = new Point(info.Point.X, info.Point.Y);
+                    if (!_menu.Bounds.Contains(point))
+                        BeginInvoke((Action)ClosePanelMenu);
+                }
+            }
+            return Native.CallNextHookEx(_hookHandle, nCode, wParam, lParam);
         }
 
         private ContextMenuStrip BuildPanelMenu()
