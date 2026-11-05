@@ -675,6 +675,7 @@ namespace TrayTemps
 
             _popup = new PlatesPopup();
             MouseEnter += (sender, args) => { _hovering = true; ShowPlates(); };
+            MouseMove += (sender, args) => { if (_hovering) ShowPlates(); };
             MouseLeave += (sender, args) => { _hovering = false; HidePlates(); };
 
             _menu = BuildPanelMenu();
@@ -866,12 +867,15 @@ namespace TrayTemps
             return null;
         }
 
-        private List<KeyValuePair<int, string>> BuildPlates()
+        private List<KeyValuePair<int, string>> BuildPlates(int hoverX)
         {
             var plates = new List<KeyValuePair<int, string>>();
             foreach (var metric in _lastMetrics)
             {
                 if (!metric.ShowWatts || metric.Plate == null) continue;
+                var start = (int)metric.StartX;
+                var end = (int)(metric.StartX + metric.Width);
+                if (hoverX < start || hoverX > end) continue;
                 plates.Add(new KeyValuePair<int, string>((int)(metric.StartX + metric.Width / 2), metric.Plate));
             }
             return plates;
@@ -880,8 +884,8 @@ namespace TrayTemps
         private void ShowPlates()
         {
             if (_popup == null) return;
-            _lastMetrics = BuildMetrics();
-            _popup.ShowPlates(BuildPlates(), new Rectangle(Location, Size));
+            var hoverX = Cursor.Position.X - Location.X;
+            _popup.ShowPlates(BuildPlates(hoverX), new Rectangle(Location, Size));
         }
 
         private void HidePlates()
