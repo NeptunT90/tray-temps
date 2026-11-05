@@ -455,7 +455,7 @@ namespace TrayTemps
             get
             {
                 var parameters = base.CreateParams;
-                parameters.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW;
+                parameters.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE;
                 return parameters;
             }
         }
@@ -1103,8 +1103,6 @@ namespace TrayTemps
 
             if (message.Msg == WM_RBUTTONUP)
                 BeginInvoke((Action)TogglePanelMenu);
-            else if (message.Msg == WM_PAINT && _lastMetrics.Count > 0 && Visible)
-                BeginInvoke((Action)(() => { try { DrawPanel(_lastMetrics); } catch { } }));
         }
 
         protected override CreateParams CreateParams
@@ -1112,7 +1110,7 @@ namespace TrayTemps
             get
             {
                 var parameters = base.CreateParams;
-                parameters.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW;
+                parameters.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE;
                 return parameters;
             }
         }
