@@ -429,15 +429,25 @@ namespace TrayTemps
     }
 
 
-    internal sealed class PowerPopup : Form
+    internal sealed class Metric
     {
-        public PowerPopup()
+        public string Label;
+        public double Value;
+        public double Watts;
+        public bool ShowWatts;
+        public float StartX;
+        public float Width;
+    }
+
+    internal sealed class PlatesPopup : Form
+    {
+        public PlatesPopup()
         {
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
-            Size = new Size(220, 26);
+            Size = new Size(240, 22);
         }
 
         protected override CreateParams CreateParams
@@ -445,40 +455,37 @@ namespace TrayTemps
             get
             {
                 var parameters = base.CreateParams;
-                parameters.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE;
+                parameters.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW;
                 return parameters;
             }
         }
 
-        private static GraphicsPath RoundedRect(int width, int height, int radius)
+        private static GraphicsPath RoundedRect(int x, int y, int width, int height, int radius)
         {
             var path = new GraphicsPath();
             var d = radius * 2;
-            path.AddArc(0, 0, d, d, 180, 90);
-            path.AddArc(width - d, 0, d, d, 270, 90);
-            path.AddArc(width - d, height - d, d, d, 0, 90);
-            path.AddArc(0, height - d, d, d, 90, 90);
+            path.AddArc(x, y, d, d, 180, 90);
+            path.AddArc(x + width - d, y, d, d, 270, 90);
+            path.AddArc(x + width - d, y + height - d, d, d, 0, 90);
+            path.AddArc(x, y + height - d, d, d, 90, 90);
             path.CloseFigure();
             return path;
         }
 
-        public void ShowText(string text, Rectangle anchor)
+        public void ShowPlates(List<KeyValuePair<int, string>> plates, Rectangle anchor)
         {
+            if (plates.Count == 0) { Hide(); return; }
+
+            const int height = 22;
+            var width = Math.Max(anchor.Width, 48);
+
             using (var family = new FontFamily("Segoe UI"))
-            using (var font = new Font(family, 9f, FontStyle.Regular, GraphicsUnit.Point))
+            using (var font = new Font(family, 8.5f, FontStyle.Bold, GraphicsUnit.Point))
             using (var probe = Graphics.FromHwnd(IntPtr.Zero))
             {
                 probe.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-                var measured = probe.MeasureString(text, font);
-                var width = (int)Math.Ceiling(measured.Width) + 22;
-                var height = 26;
-
-                var workingArea = Screen.PrimaryScreen.WorkingArea;
-                var x = anchor.Right - width;
-                if (x + width > workingArea.Right) x = workingArea.Right - width;
-                if (x < workingArea.Left) x = workingArea.Left;
-                var y = anchor.Top - height - 6;
-                if (y < workingArea.Top) y = anchor.Bottom + 6;
+                var sizes = new List<SizeF>();
+                foreach (var plate in plates) sizes.Add(probe.MeasureString(plate.Value, font));
 
                 using (var bitmap = new Bitmap(width, height, PixelFormat.Format32bppPArgb))
                 using (var graphics = Graphics.FromImage(bitmap))
@@ -487,18 +494,27 @@ namespace TrayTemps
                     graphics.SmoothingMode = SmoothingMode.AntiAlias;
                     graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
-                    using (var path = RoundedRect(width - 1, height - 1, 7))
-                    using (var fill = new SolidBrush(Color.FromArgb(232, 22, 22, 26)))
-                    using (var edge = new Pen(Color.FromArgb(70, 255, 255, 255)))
+                    for (var i = 0; i < plates.Count; i++)
                     {
-                        graphics.FillPath(fill, path);
-                        graphics.DrawPath(edge, path);
+                        var size = sizes[i];
+                        var plateWidth = (int)Math.Ceiling(size.Width) + 14;
+                        var x = plates[i].Key - plateWidth / 2;
+                        if (x + plateWidth > width) x = width - plateWidth;
+                        if (x < 0) x = 0;
+
+                        using (var path = RoundedRect(x, 0, plateWidth, height - 1, 7))
+                        using (var fill = new SolidBrush(Color.FromArgb(232, 22, 22, 26)))
+                        using (var edge = new Pen(Color.FromArgb(70, 255, 255, 255)))
+                        {
+                            graphics.FillPath(fill, path);
+                            graphics.DrawPath(edge, path);
+                        }
+
+                        using (var brush = new SolidBrush(Color.FromArgb(245, 245, 247)))
+                            graphics.DrawString(plates[i].Value, font, brush, x + 7, (height - size.Height) / 2f);
                     }
 
-                    using (var brush = new SolidBrush(Color.FromArgb(245, 245, 247)))
-                        graphics.DrawString(text, font, brush, 11, (height - measured.Height) / 2f);
-
-                    Location = new Point(x, y);
+                    Location = new Point(anchor.Left, anchor.Top - height - 6);
                     ApplyLayered(bitmap);
                 }
             }
@@ -548,9 +564,26 @@ namespace TrayTemps
         private IntPtr _hookHandle = IntPtr.Zero;
         private readonly NotifyIcon _tray;
         private IntPtr _trayIconHandle = IntPtr.Zero;
+        private ContextMenuStrip _menu;
+        private PlatesPopup _popup;
+        private Reading _lastReading = new Reading();
+        private List<Metric> _lastMetrics = new List<Metric>();
+        private bool _hovering;
+
+        private bool _alwaysOnTop;
+        private bool _showCpu = true;
+        private bool _showGpu = true;
+        private bool _showDisk = true;
+        private bool _showBoard = true;
+        private bool _showWatts = true;
+
+        private int _ticks;
+        private bool _reopened;
+        private bool _hidden;
+
+        private readonly string _settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dsh-tray-temps", "settings.txt");
 
         private const int PanelHeight = 24;
-        private const int ShadowOffset = 1;
 
         public Program()
         {
@@ -571,12 +604,12 @@ namespace TrayTemps
                 Log("reader: " + error);
             }
 
+            LoadSettings();
+
             _timer = new Timer { Interval = 2000 };
             _timer.Tick += (sender, args) => Refresh2();
             _timer.Start();
 
-            // keeps the panel above the taskbar (it is a topmost window too) and,
-            // when enabled, above borderless fullscreen games
             _topTimer = new Timer { Interval = 300 };
             _topTimer.Tick += (sender, args) =>
             {
@@ -594,10 +627,11 @@ namespace TrayTemps
                 ContextMenuStrip = BuildMenu(),
             };
             _tray.DoubleClick += (sender, args) => ToggleVisible();
-            LoadSettings();
-            _popup = new PowerPopup();
-            MouseEnter += (sender, args) => ShowPower();
-            MouseLeave += (sender, args) => HidePower();
+
+            _popup = new PlatesPopup();
+            MouseEnter += (sender, args) => { _hovering = true; ShowPlates(); };
+            MouseLeave += (sender, args) => { _hovering = false; HidePlates(); };
+
             _menu = BuildPanelMenu();
             _menu.Closed += (sender, args) =>
             {
@@ -608,112 +642,51 @@ namespace TrayTemps
                 }
                 Refresh2();
             };
-            MouseClick += (sender, args) =>
-            {
-                if (args.Button == MouseButtons.Right) TogglePanelMenu();
-            };
 
             Refresh2();
-            Timer probe = new Timer { Interval = 6000 };
-            probe.Tick += (sender, args) =>
-            {
-                probe.Stop();
-                if (_reader != null && double.IsNaN(_last.Disk)) Log("inventory:" + Environment.NewLine + _reader.Inventory());
-            };
-            probe.Start();
         }
 
-        private static string Watts(double value)
+        private ContextMenuStrip BuildMenu()
         {
-            return double.IsNaN(value) ? "\u2014" : value.ToString("0.0") + " \u0412\u0442";
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c / \u0441\u043a\u0440\u044b\u0442\u044c", null, (s, e) => ToggleVisible());
+            menu.Items.Add("\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u0435\u0439\u0447\u0430\u0441", null, (s, e) => Refresh2());
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("\u0412\u044b\u0445\u043e\u0434", null, (s, e) => Close());
+            return menu;
         }
 
-        private string BuildPowerLine()
+        private ToolStripMenuItem Toggle(string text, bool value, Action<bool> apply)
         {
-            var reading = _lastReading;
-            var parts = new List<string> { "\u0426\u041f " + Watts(reading.CpuWatts) };
-            if (!double.IsNaN(reading.GpuWatts)) parts.Add("\u0413\u041f " + Watts(reading.GpuWatts));
-            if (!double.IsNaN(reading.DiskWatts)) parts.Add("\u0414\u0418\u0421\u041a " + Watts(reading.DiskWatts));
-            var sum = 0.0;
-            var count = 0;
-            foreach (var value in new[] { reading.CpuWatts, reading.GpuWatts, reading.DiskWatts })
-            {
-                if (double.IsNaN(value)) continue;
-                sum += value;
-                count++;
-            }
-            if (count > 1) parts.Add("\u2211 " + sum.ToString("0.0") + " \u0412\u0442");
-            return string.Join("   ", parts.ToArray());
-        }
-
-        private void ShowPower()
-        {
-            if (_popup == null) return;
-            _popup.ShowText(BuildPowerLine(), new Rectangle(Location, Size));
-        }
-
-        private void HidePower()
-        {
-            if (_popup != null) _popup.Hide();
-        }
-
-        private void TogglePanelMenu()
-        {
-            if (_menu.Visible) { ClosePanelMenu(); return; }
-
-            var size = _menu.PreferredSize;
-            var x = Math.Max(0, Math.Min(Location.X, Screen.PrimaryScreen.WorkingArea.Right - size.Width));
-            var y = Location.Y - size.Height - 6;
-            if (y < 0) y = Location.Y + Height + 6;
-            _menu.Show(new Point(x, y));
-
-            _mouseHook = MouseHookCallback;
-            _hookHandle = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, _mouseHook, IntPtr.Zero, 0);
-        }
-
-        private void ClosePanelMenu()
-        {
-            if (_hookHandle != IntPtr.Zero)
-            {
-                Native.UnhookWindowsHookEx(_hookHandle);
-                _hookHandle = IntPtr.Zero;
-            }
-            if (_menu.Visible) _menu.Close();
-        }
-
-        private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
-        {
-            if (nCode >= 0 && _menu != null && _menu.Visible)
-            {
-                var message = wParam.ToInt32();
-                if (message == Native.WM_LBUTTONDOWN || message == Native.WM_RBUTTONDOWN)
-                {
-                    var info = (Native.MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Native.MSLLHOOKSTRUCT));
-                    var point = new Point(info.Point.X, info.Point.Y);
-                    if (!_menu.Bounds.Contains(point))
-                        BeginInvoke((Action)ClosePanelMenu);
-                }
-            }
-            return Native.CallNextHookEx(_hookHandle, nCode, wParam, lParam);
+            var item = new ToolStripMenuItem(text) { CheckOnClick = true, Checked = value };
+            item.CheckedChanged += (s, e) => { apply(item.Checked); SaveSettings(); Refresh2(); };
+            return item;
         }
 
         private ContextMenuStrip BuildPanelMenu()
         {
             var menu = new ContextMenuStrip();
-            var top = new ToolStripMenuItem("Поверх всех окон") { CheckOnClick = true, Checked = _alwaysOnTop };
-            top.CheckedChanged += (sender, args) =>
-            {
-                _alwaysOnTop = top.Checked;
-                SaveSettings();
-            };
-            var startup = new ToolStripMenuItem("Запускать с Windows") { CheckOnClick = true, Checked = StartupShortcutExists() };
-            startup.CheckedChanged += (sender, args) => SetStartupShortcut(startup.Checked);
-            var hide = new ToolStripMenuItem("Скрыть");
-            hide.Click += (sender, args) => ToggleVisible();
-            var exit = new ToolStripMenuItem("Выход");
-            exit.Click += (sender, args) => Close();
+            var top = new ToolStripMenuItem("\u041f\u043e\u0432\u0435\u0440\u0445 \u0432\u0441\u0435\u0445 \u043e\u043a\u043e\u043d") { CheckOnClick = true, Checked = _alwaysOnTop };
+            top.CheckedChanged += (s, e) => { _alwaysOnTop = top.Checked; SaveSettings(); };
+
+            var visible = new ToolStripMenuItem("\u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c");
+            visible.DropDownItems.Add(Toggle("\u0426\u041f", _showCpu, v => _showCpu = v));
+            visible.DropDownItems.Add(Toggle("\u0413\u041f", _showGpu, v => _showGpu = v));
+            visible.DropDownItems.Add(Toggle("\u0414\u0418\u0421\u041a", _showDisk, v => _showDisk = v));
+            visible.DropDownItems.Add(Toggle("\u041f\u041b\u0410\u0422\u0410", _showBoard, v => _showBoard = v));
+            visible.DropDownItems.Add(new ToolStripSeparator());
+            visible.DropDownItems.Add(Toggle("\u0412\u0430\u0442\u0442\u044b \u0426\u041f", _showWatts, v => _showWatts = v));
+
+            var startup = new ToolStripMenuItem("\u0417\u0430\u043f\u0443\u0441\u043a\u0430\u0442\u044c \u0441 Windows") { CheckOnClick = true, Checked = StartupShortcutExists() };
+            startup.CheckedChanged += (s, e) => SetStartupShortcut(startup.Checked);
+
+            var hide = new ToolStripMenuItem("\u0421\u043a\u0440\u044b\u0442\u044c");
+            hide.Click += (s, e) => ToggleVisible();
+            var exit = new ToolStripMenuItem("\u0412\u044b\u0445\u043e\u0434");
+            exit.Click += (s, e) => Close();
 
             menu.Items.Add(top);
+            menu.Items.Add(visible);
             menu.Items.Add(startup);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(hide);
@@ -759,7 +732,13 @@ namespace TrayTemps
                 if (!File.Exists(_settingsPath)) return;
                 foreach (var line in File.ReadAllLines(_settingsPath))
                 {
-                    if (line.StartsWith("alwaysOnTop=")) _alwaysOnTop = line.EndsWith("1");
+                    var trimmed = line.Trim();
+                    if (trimmed.StartsWith("alwaysOnTop=")) _alwaysOnTop = trimmed.EndsWith("1");
+                    else if (trimmed.StartsWith("showCpu=")) _showCpu = trimmed.EndsWith("1");
+                    else if (trimmed.StartsWith("showGpu=")) _showGpu = trimmed.EndsWith("1");
+                    else if (trimmed.StartsWith("showDisk=")) _showDisk = trimmed.EndsWith("1");
+                    else if (trimmed.StartsWith("showBoard=")) _showBoard = trimmed.EndsWith("1");
+                    else if (trimmed.StartsWith("showWatts=")) _showWatts = trimmed.EndsWith("1");
                 }
             }
             catch { }
@@ -770,35 +749,25 @@ namespace TrayTemps
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath));
-                File.WriteAllText(_settingsPath, "alwaysOnTop=" + (_alwaysOnTop ? "1" : "0") + Environment.NewLine);
+                var lines = new List<string>
+                {
+                    "alwaysOnTop=" + (_alwaysOnTop ? "1" : "0"),
+                    "showCpu=" + (_showCpu ? "1" : "0"),
+                    "showGpu=" + (_showGpu ? "1" : "0"),
+                    "showDisk=" + (_showDisk ? "1" : "0"),
+                    "showBoard=" + (_showBoard ? "1" : "0"),
+                    "showWatts=" + (_showWatts ? "1" : "0"),
+                };
+                File.WriteAllLines(_settingsPath, lines.ToArray());
             }
             catch { }
         }
 
-        private ContextMenuStrip BuildMenu()
-        {
-            var menu = new ContextMenuStrip();
-            menu.Items.Add("\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c / \u0441\u043a\u0440\u044b\u0442\u044c", null, (s, e) => ToggleVisible());
-            menu.Items.Add("\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u0435\u0439\u0447\u0430\u0441", null, (s, e) => Refresh2());
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("\u0412\u044b\u0445\u043e\u0434", null, (s, e) => Close());
-            return menu;
-        }
-
-        private bool _hidden;
-        private bool _alwaysOnTop;
-        private ContextMenuStrip _menu;
-        private PowerPopup _popup;
-        private Reading _lastReading = new Reading();
-        private readonly string _settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dsh-tray-temps", "settings.txt");
-        private readonly Reading _last = new Reading();
-        private int _ticks;
-        private string[] _lastLabels;
-        private double[] _lastValues;
-        private bool _reopened;
+        private bool _hiddenFlag;
         private void ToggleVisible()
         {
-            _hidden = !_hidden;
+            _hiddenFlag = !_hiddenFlag;
+            _hidden = _hiddenFlag;
             Visible = !_hidden;
         }
 
@@ -818,79 +787,44 @@ namespace TrayTemps
             return double.IsNaN(value) ? "\u2014" : value.ToString("0") + "\u00b0";
         }
 
-        private bool IsFullscreenForeground()
+        private static string Watts(double value)
         {
-            var foreground = Native.GetForegroundWindow();
-            if (foreground == IntPtr.Zero || foreground == Handle) return false;
-            Native.RECT bounds;
-            if (!Native.GetWindowRect(foreground, out bounds)) return false;
-            var monitor = Native.MonitorFromWindow(foreground, 2);
-            var info = new Native.MONITORINFO { Size = Marshal.SizeOf(typeof(Native.MONITORINFO)) };
-            if (!Native.GetMonitorInfo(monitor, ref info)) return false;
-            if (bounds.Left > info.Monitor.Left || bounds.Top > info.Monitor.Top ||
-                bounds.Right < info.Monitor.Right || bounds.Bottom < info.Monitor.Bottom) return false;
-            var name = new System.Text.StringBuilder(256);
-            Native.GetClassName(foreground, name, 256);
-            var cls = name.ToString();
-            return cls != "Progman" && cls != "WorkerW" && cls != "Shell_TrayWnd";
+            return double.IsNaN(value) ? "\u2014" : value.ToString("0.0") + " \u0412\u0442";
         }
 
-        private void Refresh2()
+        private List<Metric> BuildMetrics()
         {
-            try { RefreshCore(); }
-            catch (Exception error) { Log("refresh: " + error); }
+            var reading = _lastReading;
+            var list = new List<Metric>();
+            if (_showCpu) list.Add(new Metric { Label = "\u0426\u041f", Value = reading.Cpu, Watts = reading.CpuWatts });
+            if (_showGpu) list.Add(new Metric { Label = "\u0413\u041f", Value = reading.Gpu, Watts = reading.GpuWatts });
+            if (_showDisk) list.Add(new Metric { Label = "\u0414\u0418\u0421\u041a", Value = reading.Disk, Watts = reading.DiskWatts });
+            if (_showBoard) list.Add(new Metric { Label = "\u041f\u041b\u0410\u0422\u0410", Value = reading.Board, Watts = double.NaN });
+            foreach (var metric in list) metric.ShowWatts = _showWatts && !double.IsNaN(metric.Watts);
+            return list;
         }
 
-        private void RefreshCore()
+        private List<KeyValuePair<int, string>> BuildPlates()
         {
-            Reading reading;
-            if (_reader == null)
+            var plates = new List<KeyValuePair<int, string>>();
+            foreach (var metric in _lastMetrics)
             {
-                reading = new Reading();
-                reading.Gpu = SensorReader.NvidiaTemperature();
-                reading.Board = SensorReader.AcpiZone();
-                reading.Disk = SensorReader.StorageTemperature();
+                if (!metric.ShowWatts) continue;
+                plates.Add(new KeyValuePair<int, string>((int)(metric.StartX + metric.Width / 2), Watts(metric.Watts)));
             }
-            else
-            {
-                try { reading = _reader.Read(); }
-                catch { reading = new Reading(); }
-            }
+            return plates;
+        }
 
-            // keep the last good value when a sensor is asleep or momentarily unavailable
-            if (double.IsNaN(reading.Cpu)) reading.Cpu = _last.Cpu; else _last.Cpu = reading.Cpu;
-            if (double.IsNaN(reading.Gpu)) reading.Gpu = _last.Gpu; else _last.Gpu = reading.Gpu;
-            if (double.IsNaN(reading.Disk)) reading.Disk = _last.Disk; else _last.Disk = reading.Disk;
-            if (double.IsNaN(reading.Board)) reading.Board = _last.Board; else _last.Board = reading.Board;
+        private void ShowPlates()
+        {
+            if (_popup == null) return;
+            _lastMetrics = BuildMetrics();
+            _popup.ShowPlates(BuildPlates(), new Rectangle(Location, Size));
+        }
 
-            _ticks++;
-            if (double.IsNaN(reading.Disk) && !_reopened && _ticks > 3)
-            {
-                _reopened = true;
-                try { if (_reader != null) _reader.Reopen(); } catch { }
-            }
-
-            var values = new[] { reading.Cpu, reading.Gpu, reading.Disk, reading.Board };
-            var labels = new[] { "\u0426\u041f", "\u0413\u041f", "\u0414\u0418\u0421\u041a", "\u041f\u041b\u0410\u0422\u0410" };
-            var tooltip = string.Format("{0} {1}   {2} {3}   {4} {5}   {6} {7}",
-                labels[0], Format(values[0]), labels[1], Format(values[1]), labels[2], Format(values[2]), labels[3], Format(values[3]));
-            _tray.Text = tooltip.Length > 63 ? tooltip.Substring(0, 63) : tooltip;
-            if (Visible == _hidden)
-            {
-                Log("visibility=" + !_hidden);
-                Visible = !_hidden;
-            }
-            // the taskbar is a topmost window too: without a periodic re-assert it
-            // covers the panel as soon as anything else gets clicked
-            Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
-            if (!Visible) return;
-
-            _lastLabels = labels;
-            _lastValues = values;
-            _lastReading = reading;
-            if (_popup != null && _popup.Visible) _popup.ShowText(BuildPowerLine(), new Rectangle(Location, Size));
-            DrawPanel(labels, values);
-            UpdateIcon(reading.Cpu);
+        private void HidePlates()
+        {
+            if (_popup != null) _popup.Hide();
         }
 
         private static Color ValueColor(double value)
@@ -902,7 +836,7 @@ namespace TrayTemps
             return Color.FromArgb(190, 230, 195);
         }
 
-        private void DrawPanel(string[] labels, double[] values)
+        private void DrawPanel(List<Metric> metrics)
         {
             const float fontSize = 9.5f;
             using (var family = new FontFamily("Segoe UI"))
@@ -911,50 +845,54 @@ namespace TrayTemps
             using (var probe = Graphics.FromHwnd(IntPtr.Zero))
             {
                 probe.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-                var parts = new List<KeyValuePair<string, SizeF>>();
-                float total = 0;
-                for (var i = 0; i < labels.Length; i++)
+
+                const float gap = 10f;
+                const float padding = 5f;
+                var widths = new List<float>();
+                var total = padding * 2;
+                for (var i = 0; i < metrics.Count; i++)
                 {
-                    var label = labels[i] + " ";
-                    var value = Format(values[i]);
-                    var labelSize = probe.MeasureString(label, labelFont);
-                    var valueSize = probe.MeasureString(value, valueFont);
-                    parts.Add(new KeyValuePair<string, SizeF>("label:" + i, labelSize));
-                    parts.Add(new KeyValuePair<string, SizeF>("value:" + i, valueSize));
-                    total += labelSize.Width + valueSize.Width;
-                    if (i < labels.Length - 1) total += probe.MeasureString("  ", labelFont).Width;
+                    var width = probe.MeasureString(metrics[i].Label + " ", labelFont).Width + probe.MeasureString(Format(metrics[i].Value), valueFont).Width;
+                    widths.Add(width);
+                    total += width;
+                    if (i < metrics.Count - 1) total += gap;
                 }
 
-                var width = (int)Math.Ceiling(total) + 8;
+                var panelWidth = Math.Max(24, (int)Math.Ceiling(total));
                 var height = PanelHeight;
 
-                using (var bitmap = new Bitmap(width, height, PixelFormat.Format32bppPArgb))
+                using (var bitmap = new Bitmap(panelWidth, height, PixelFormat.Format32bppPArgb))
                 using (var graphics = Graphics.FromImage(bitmap))
                 {
                     graphics.Clear(Color.FromArgb(1, 0, 0, 0));
                     graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                     graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-                    float x = 4;
+                    float x = padding;
                     var baseline = (height - labelFont.GetHeight(graphics)) / 2f;
 
-                    Action<string, Font, Color> draw = (text, font, color) =>
+                    for (var i = 0; i < metrics.Count; i++)
                     {
-                        using (var shadow = new SolidBrush(Color.FromArgb(140, 0, 0, 0)))
-                            graphics.DrawString(text, font, shadow, x + ShadowOffset, baseline + ShadowOffset);
-                        using (var brush = new SolidBrush(color))
-                            graphics.DrawString(text, font, brush, x, baseline);
-                        x += graphics.MeasureString(text, font).Width;
-                    };
+                        var metric = metrics[i];
+                        metric.StartX = x;
+                        metric.Width = widths[i];
 
-                    for (var i = 0; i < labels.Length; i++)
-                    {
-                        draw(labels[i] + " ", labelFont, Color.FromArgb(185, 185, 190));
-                        draw(Format(values[i]), valueFont, ValueColor(values[i]));
-                        if (i < labels.Length - 1) draw("  ", labelFont, Color.Transparent);
+                        var labelText = metric.Label + " ";
+                        using (var shadow = new SolidBrush(Color.FromArgb(140, 0, 0, 0)))
+                            graphics.DrawString(labelText, labelFont, shadow, x + 1, baseline + 1);
+                        using (var brush = new SolidBrush(Color.FromArgb(185, 185, 190)))
+                            graphics.DrawString(labelText, labelFont, brush, x, baseline);
+                        x += graphics.MeasureString(labelText, labelFont).Width;
+
+                        var valueText = Format(metric.Value);
+                        using (var shadow = new SolidBrush(Color.FromArgb(140, 0, 0, 0)))
+                            graphics.DrawString(valueText, valueFont, shadow, x + 1, baseline + 1);
+                        using (var brush = new SolidBrush(ValueColor(metric.Value)))
+                            graphics.DrawString(valueText, valueFont, brush, x, baseline);
+                        x += graphics.MeasureString(valueText, valueFont).Width + gap;
                     }
 
-                    DockToTaskbar(width);
+                    DockToTaskbar(panelWidth);
                     ApplyLayered(bitmap);
                 }
             }
@@ -970,7 +908,6 @@ namespace TrayTemps
             {
                 hBitmap = bitmap.GetHbitmap(Color.FromArgb(0));
                 oldBitmap = Native.SelectObject(memoryDc, hBitmap);
-
                 var size = new Native.SIZE(bitmap.Width, bitmap.Height);
                 var source = new Native.POINT(0, 0);
                 var blend = new Native.BLENDFUNCTION
@@ -1038,17 +975,136 @@ namespace TrayTemps
             catch { }
         }
 
+        private void Refresh2()
+        {
+            try { RefreshCore(); }
+            catch (Exception error) { Log("refresh: " + error); }
+        }
+
+        private void RefreshCore()
+        {
+            Reading reading;
+            if (_reader == null)
+            {
+                reading = new Reading();
+                reading.Gpu = SensorReader.NvidiaTemperature();
+                reading.Board = SensorReader.AcpiZone();
+                reading.Disk = SensorReader.StorageTemperature();
+            }
+            else
+            {
+                try { reading = _reader.Read(); }
+                catch { reading = new Reading(); }
+            }
+
+            if (double.IsNaN(reading.Cpu)) reading.Cpu = _lastReading.Cpu; else _lastReading.Cpu = reading.Cpu;
+            if (double.IsNaN(reading.Gpu)) reading.Gpu = _lastReading.Gpu; else _lastReading.Gpu = reading.Gpu;
+            if (double.IsNaN(reading.Disk)) reading.Disk = _lastReading.Disk; else _lastReading.Disk = reading.Disk;
+            if (double.IsNaN(reading.Board)) reading.Board = _lastReading.Board; else _lastReading.Board = reading.Board;
+            if (double.IsNaN(reading.CpuWatts)) reading.CpuWatts = _lastReading.CpuWatts; else _lastReading.CpuWatts = reading.CpuWatts;
+            if (double.IsNaN(reading.GpuWatts)) reading.GpuWatts = _lastReading.GpuWatts; else _lastReading.GpuWatts = reading.GpuWatts;
+
+            _ticks++;
+            if (double.IsNaN(reading.Disk) && !_reopened && _ticks > 3)
+            {
+                _reopened = true;
+                try { if (_reader != null) _reader.Reopen(); } catch { }
+            }
+
+            var metrics = BuildMetrics();
+            _lastMetrics = metrics;
+
+            var tooltipParts = new List<string>();
+            foreach (var metric in metrics) tooltipParts.Add(metric.Label + " " + Format(metric.Value));
+            var tooltip = string.Join("   ", tooltipParts.ToArray());
+            _tray.Text = tooltip.Length > 63 ? tooltip.Substring(0, 63) : tooltip;
+
+            if (Visible == _hidden)
+            {
+                Visible = !_hidden;
+            }
+            ActiveTopmost();
+
+            if (!Visible) return;
+
+            DrawPanel(metrics);
+            UpdateIcon(reading.Cpu);
+
+            if (_hovering) ShowPlates();
+        }
+
+        private void ActiveTopmost()
+        {
+            Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        }
+
+        private bool IsFullscreenForeground()
+        {
+            var foreground = Native.GetForegroundWindow();
+            if (foreground == IntPtr.Zero || foreground == Handle) return false;
+            Native.RECT bounds;
+            if (!Native.GetWindowRect(foreground, out bounds)) return false;
+            var monitor = Native.MonitorFromWindow(foreground, 2);
+            var info = new Native.MONITORINFO { Size = Marshal.SizeOf(typeof(Native.MONITORINFO)) };
+            if (!Native.GetMonitorInfo(monitor, ref info)) return false;
+            if (bounds.Left > info.Monitor.Left || bounds.Top > info.Monitor.Top ||
+                bounds.Right < info.Monitor.Right || bounds.Bottom < info.Monitor.Bottom) return false;
+            var name = new System.Text.StringBuilder(256);
+            Native.GetClassName(foreground, name, 256);
+            var cls = name.ToString();
+            return cls != "Progman" && cls != "WorkerW" && cls != "Shell_TrayWnd";
+        }
+
+        private void TogglePanelMenu()
+        {
+            if (_menu.Visible) { ClosePanelMenu(); return; }
+
+            var size = _menu.PreferredSize;
+            var x = Math.Max(0, Math.Min(Location.X, Screen.PrimaryScreen.WorkingArea.Right - size.Width));
+            var y = Location.Y - size.Height - 6;
+            if (y < 0) y = Location.Y + Height + 6;
+            _menu.Show(new Point(x, y));
+
+            _mouseHook = MouseHookCallback;
+            _hookHandle = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, _mouseHook, IntPtr.Zero, 0);
+        }
+
+        private void ClosePanelMenu()
+        {
+            if (_hookHandle != IntPtr.Zero)
+            {
+                Native.UnhookWindowsHookEx(_hookHandle);
+                _hookHandle = IntPtr.Zero;
+            }
+            if (_menu.Visible) _menu.Close();
+        }
+
+        private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0 && _menu != null && _menu.Visible)
+            {
+                var message = wParam.ToInt32();
+                if (message == Native.WM_LBUTTONDOWN || message == Native.WM_RBUTTONDOWN)
+                {
+                    var info = (Native.MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Native.MSLLHOOKSTRUCT));
+                    var point = new Point(info.Point.X, info.Point.Y);
+                    if (!_menu.Bounds.Contains(point))
+                        BeginInvoke((Action)ClosePanelMenu);
+                }
+            }
+            return Native.CallNextHookEx(_hookHandle, nCode, wParam, lParam);
+        }
+
         protected override void WndProc(ref Message message)
         {
+            const int WM_RBUTTONUP = 0x0205;
             const int WM_PAINT = 0x000F;
-            const int WM_DISPLAYCHANGE = 0x007E;
-            const int WM_SETTINGCHANGE = 0x001A;
             base.WndProc(ref message);
-            if ((message.Msg == WM_PAINT || message.Msg == WM_DISPLAYCHANGE || message.Msg == WM_SETTINGCHANGE)
-                && _lastLabels != null && Visible)
-            {
-                try { DrawPanel(_lastLabels, _lastValues); } catch { }
-            }
+
+            if (message.Msg == WM_RBUTTONUP)
+                BeginInvoke((Action)TogglePanelMenu);
+            else if (message.Msg == WM_PAINT && _lastMetrics.Count > 0 && Visible)
+                BeginInvoke((Action)(() => { try { DrawPanel(_lastMetrics); } catch { } }));
         }
 
         protected override CreateParams CreateParams
@@ -1056,7 +1112,7 @@ namespace TrayTemps
             get
             {
                 var parameters = base.CreateParams;
-                parameters.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE;
+                parameters.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW;
                 return parameters;
             }
         }
@@ -1064,6 +1120,7 @@ namespace TrayTemps
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             _timer.Stop();
+            _topTimer.Stop();
             if (_reader != null) _reader.Dispose();
             _tray.Visible = false;
             _tray.Dispose();

@@ -82,3 +82,4 @@ build\build.ps1 -Version 1.0.0
 РљРѕРґ РїСЂРёР»РѕР¶РµРЅРёСЏ вЂ” MIT (СЃРј. [LICENSE](LICENSE)).
 Р‘РёР±Р»РёРѕС‚РµРєРё РґР°С‚С‡РёРєРѕРІ СЂР°СЃРїСЂРѕСЃС‚СЂР°РЅСЏСЋС‚СЃСЏ РїРѕРґ СЃРІРѕРёРјРё Р»РёС†РµРЅР·РёСЏРјРё вЂ” СЃРј. [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). LibreHardwareMonitor вЂ” MPL-2.0, РёСЃС…РѕРґРЅРёРєРё: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor.
 
+
