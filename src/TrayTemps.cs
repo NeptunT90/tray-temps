@@ -18,6 +18,9 @@ namespace TrayTemps
         public double Gpu = double.NaN;
         public double Disk = double.NaN;
         public double Board = double.NaN;
+        public double CpuWatts = double.NaN;
+        public double GpuWatts = double.NaN;
+        public double DiskWatts = double.NaN;
     }
 
     internal sealed class SensorReader : IDisposable
@@ -60,7 +63,7 @@ namespace TrayTemps
                 {
                     Update(hardware);
                     var type = hardware.GetType().GetProperty("HardwareType").GetValue(hardware, null).ToString();
-                    Apply(reading, type, Temperatures(hardware));
+                    Apply(reading, type, Temperatures(hardware), Powers(hardware));
 
                     var subProperty = hardware.GetType().GetProperty("SubHardware");
                     if (subProperty == null) continue;
@@ -68,7 +71,7 @@ namespace TrayTemps
                     {
                         Update(sub);
                         var subType = sub.GetType().GetProperty("HardwareType").GetValue(sub, null).ToString();
-                        Apply(reading, subType, Temperatures(sub));
+                        Apply(reading, subType, Temperatures(sub), Powers(sub));
                     }
                 }
             }
@@ -83,6 +86,7 @@ namespace TrayTemps
             }
             if (double.IsNaN(reading.Gpu)) reading.Gpu = NvidiaTemperature();
             if (double.IsNaN(reading.Disk)) reading.Disk = StorageTemperature();
+            if (double.IsNaN(reading.GpuWatts)) reading.GpuWatts = NvidiaPower();
             return reading;
         }
 
@@ -109,7 +113,24 @@ namespace TrayTemps
             return list;
         }
 
-        private static void Apply(Reading reading, string type, List<KeyValuePair<string, double>> temperatures)
+        private static List<KeyValuePair<string, double>> Powers(object hardware)
+        {
+            var list = new List<KeyValuePair<string, double>>();
+            var sensors = (System.Collections.IEnumerable)hardware.GetType().GetProperty("Sensors").GetValue(hardware, null);
+            foreach (var sensor in sensors)
+            {
+                if (sensor.GetType().GetProperty("SensorType").GetValue(sensor, null).ToString() != "Power") continue;
+                var valueObject = sensor.GetType().GetProperty("Value").GetValue(sensor, null);
+                if (valueObject == null) continue;
+                var value = Convert.ToDouble(valueObject);
+                if (double.IsNaN(value) || value <= 0 || value > 1000) continue;
+                var name = (string)sensor.GetType().GetProperty("Name").GetValue(sensor, null);
+                list.Add(new KeyValuePair<string, double>(name, value));
+            }
+            return list;
+        }
+
+        private static void Apply(Reading reading, string type, List<KeyValuePair<string, double>> temperatures, List<KeyValuePair<string, double>> powers)
         {
             if (temperatures.Count == 0) return;
             if (type.IndexOf("Cpu", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -124,6 +145,11 @@ namespace TrayTemps
                 if (double.IsNaN(best))
                     foreach (var pair in temperatures) if (double.IsNaN(best) || pair.Value > best) best = pair.Value;
                 if (!double.IsNaN(best)) reading.Cpu = best;
+                foreach (var pair in powers)
+                {
+                    if (pair.Key.ToLowerInvariant().Contains("package")) { reading.CpuWatts = pair.Value; break; }
+                }
+                if (double.IsNaN(reading.CpuWatts) && powers.Count > 0) reading.CpuWatts = powers[0].Value;
                 return;
             }
             if (type.IndexOf("Gpu", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -133,11 +159,17 @@ namespace TrayTemps
                     if (pair.Key.ToLowerInvariant().Contains("core")) { reading.Gpu = pair.Value; return; }
                 }
                 if (double.IsNaN(reading.Gpu)) reading.Gpu = temperatures[0].Value;
+                foreach (var pair in powers)
+                {
+                    var key = pair.Key.ToLowerInvariant();
+                    if (key.Contains("power") || key.Contains("package")) { reading.GpuWatts = pair.Value; break; }
+                }
                 return;
             }
             if (type.IndexOf("Storage", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 if (double.IsNaN(reading.Disk)) reading.Disk = temperatures[0].Value;
+                if (powers.Count > 0 && double.IsNaN(reading.DiskWatts)) reading.DiskWatts = powers[0].Value;
                 return;
             }
             if (type.IndexOf("Motherboard", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -148,6 +180,28 @@ namespace TrayTemps
 
         private static double _diskCacheValue = double.NaN;
         private static DateTime _diskCacheAt = DateTime.MinValue;
+
+        internal static double NvidiaPower()
+        {
+            try
+            {
+                var info = new ProcessStartInfo("nvidia-smi", "--query-gpu=power.draw --format=csv,noheader,nounits")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                };
+                using (var process = Process.Start(info))
+                {
+                    var text = process.StandardOutput.ReadToEnd().Trim();
+                    process.WaitForExit(4000);
+                    double value;
+                    if (double.TryParse(text.Split('\n')[0].Trim(), out value) && value > 0) return value;
+                }
+            }
+            catch { }
+            return double.NaN;
+        }
 
         internal static double StorageTemperature()
         {
@@ -374,6 +428,117 @@ namespace TrayTemps
             IntPtr srcDc, ref POINT srcPoint, int colorKey, ref BLENDFUNCTION blend, int flags);
     }
 
+
+    internal sealed class PowerPopup : Form
+    {
+        public PowerPopup()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            TopMost = true;
+            StartPosition = FormStartPosition.Manual;
+            Size = new Size(220, 26);
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var parameters = base.CreateParams;
+                parameters.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE;
+                return parameters;
+            }
+        }
+
+        private static GraphicsPath RoundedRect(int width, int height, int radius)
+        {
+            var path = new GraphicsPath();
+            var d = radius * 2;
+            path.AddArc(0, 0, d, d, 180, 90);
+            path.AddArc(width - d, 0, d, d, 270, 90);
+            path.AddArc(width - d, height - d, d, d, 0, 90);
+            path.AddArc(0, height - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        public void ShowText(string text, Rectangle anchor)
+        {
+            using (var family = new FontFamily("Segoe UI"))
+            using (var font = new Font(family, 9f, FontStyle.Regular, GraphicsUnit.Point))
+            using (var probe = Graphics.FromHwnd(IntPtr.Zero))
+            {
+                probe.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                var measured = probe.MeasureString(text, font);
+                var width = (int)Math.Ceiling(measured.Width) + 22;
+                var height = 26;
+
+                var workingArea = Screen.PrimaryScreen.WorkingArea;
+                var x = anchor.Right - width;
+                if (x + width > workingArea.Right) x = workingArea.Right - width;
+                if (x < workingArea.Left) x = workingArea.Left;
+                var y = anchor.Top - height - 6;
+                if (y < workingArea.Top) y = anchor.Bottom + 6;
+
+                using (var bitmap = new Bitmap(width, height, PixelFormat.Format32bppPArgb))
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    graphics.Clear(Color.Transparent);
+                    graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                    graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+                    using (var path = RoundedRect(width - 1, height - 1, 7))
+                    using (var fill = new SolidBrush(Color.FromArgb(232, 22, 22, 26)))
+                    using (var edge = new Pen(Color.FromArgb(70, 255, 255, 255)))
+                    {
+                        graphics.FillPath(fill, path);
+                        graphics.DrawPath(edge, path);
+                    }
+
+                    using (var brush = new SolidBrush(Color.FromArgb(245, 245, 247)))
+                        graphics.DrawString(text, font, brush, 11, (height - measured.Height) / 2f);
+
+                    Location = new Point(x, y);
+                    ApplyLayered(bitmap);
+                }
+            }
+
+            Visible = true;
+            Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        }
+
+        private void ApplyLayered(Bitmap bitmap)
+        {
+            var screenDc = Native.GetDC(IntPtr.Zero);
+            var memoryDc = Native.CreateCompatibleDC(screenDc);
+            var hBitmap = IntPtr.Zero;
+            var oldBitmap = IntPtr.Zero;
+            try
+            {
+                hBitmap = bitmap.GetHbitmap(Color.FromArgb(0));
+                oldBitmap = Native.SelectObject(memoryDc, hBitmap);
+                var size = new Native.SIZE(bitmap.Width, bitmap.Height);
+                var source = new Native.POINT(0, 0);
+                var blend = new Native.BLENDFUNCTION
+                {
+                    BlendOp = Native.AC_SRC_OVER,
+                    BlendFlags = 0,
+                    SourceConstantAlpha = 255,
+                    AlphaFormat = Native.AC_SRC_ALPHA,
+                };
+                var destination = new Native.POINT(Location.X, Location.Y);
+                Native.UpdateLayeredWindow(Handle, screenDc, ref destination, ref size, memoryDc, ref source, 0, ref blend, Native.ULW_ALPHA);
+            }
+            finally
+            {
+                Native.ReleaseDC(IntPtr.Zero, screenDc);
+                if (hBitmap != IntPtr.Zero) Native.DeleteObject(hBitmap);
+                if (oldBitmap != IntPtr.Zero) Native.SelectObject(memoryDc, oldBitmap);
+                Native.DeleteDC(memoryDc);
+            }
+        }
+    }
+
     internal sealed class Program : Form
     {
         private readonly SensorReader _reader;
@@ -430,6 +595,9 @@ namespace TrayTemps
             };
             _tray.DoubleClick += (sender, args) => ToggleVisible();
             LoadSettings();
+            _popup = new PowerPopup();
+            MouseEnter += (sender, args) => ShowPower();
+            MouseLeave += (sender, args) => HidePower();
             _menu = BuildPanelMenu();
             _menu.Closed += (sender, args) =>
             {
@@ -453,6 +621,40 @@ namespace TrayTemps
                 if (_reader != null && double.IsNaN(_last.Disk)) Log("inventory:" + Environment.NewLine + _reader.Inventory());
             };
             probe.Start();
+        }
+
+        private static string Watts(double value)
+        {
+            return double.IsNaN(value) ? "\u2014" : value.ToString("0.0") + " \u0412\u0442";
+        }
+
+        private string BuildPowerLine()
+        {
+            var reading = _lastReading;
+            var parts = new List<string> { "\u0426\u041f " + Watts(reading.CpuWatts) };
+            if (!double.IsNaN(reading.GpuWatts)) parts.Add("\u0413\u041f " + Watts(reading.GpuWatts));
+            if (!double.IsNaN(reading.DiskWatts)) parts.Add("\u0414\u0418\u0421\u041a " + Watts(reading.DiskWatts));
+            var sum = 0.0;
+            var count = 0;
+            foreach (var value in new[] { reading.CpuWatts, reading.GpuWatts, reading.DiskWatts })
+            {
+                if (double.IsNaN(value)) continue;
+                sum += value;
+                count++;
+            }
+            if (count > 1) parts.Add("\u2211 " + sum.ToString("0.0") + " \u0412\u0442");
+            return string.Join("   ", parts.ToArray());
+        }
+
+        private void ShowPower()
+        {
+            if (_popup == null) return;
+            _popup.ShowText(BuildPowerLine(), new Rectangle(Location, Size));
+        }
+
+        private void HidePower()
+        {
+            if (_popup != null) _popup.Hide();
         }
 
         private void TogglePanelMenu()
@@ -586,6 +788,8 @@ namespace TrayTemps
         private bool _hidden;
         private bool _alwaysOnTop;
         private ContextMenuStrip _menu;
+        private PowerPopup _popup;
+        private Reading _lastReading = new Reading();
         private readonly string _settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dsh-tray-temps", "settings.txt");
         private readonly Reading _last = new Reading();
         private int _ticks;
@@ -683,6 +887,8 @@ namespace TrayTemps
 
             _lastLabels = labels;
             _lastValues = values;
+            _lastReading = reading;
+            if (_popup != null && _popup.Visible) _popup.ShowText(BuildPowerLine(), new Rectangle(Location, Size));
             DrawPanel(labels, values);
             UpdateIcon(reading.Cpu);
         }
@@ -861,6 +1067,7 @@ namespace TrayTemps
             if (_reader != null) _reader.Dispose();
             _tray.Visible = false;
             _tray.Dispose();
+            if (_popup != null) _popup.Dispose();
             base.OnFormClosing(e);
         }
 
